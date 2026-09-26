@@ -1,5 +1,6 @@
 import importlib.util
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from load_seed import load_seed
@@ -8,7 +9,7 @@ SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
 
 
 def _rows(db_path, table, order_by):
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         return [dict(r) for r in conn.execute(f"SELECT * FROM {table} ORDER BY {order_by}")]
 
@@ -46,7 +47,7 @@ def test_load_seed_copies_a_known_seed_row_correctly(tmp_path):
     db_path = tmp_path / "app.db"
     load_seed(db_path=db_path, seed_dir=SEED_DIR)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         ticket = dict(conn.execute("SELECT * FROM tickets WHERE ticket_id = ?", ("T-1042",)).fetchone())
         customer = dict(conn.execute("SELECT * FROM customers WHERE customer_id = ?", ("C-77",)).fetchone())
@@ -64,7 +65,7 @@ def test_load_seed_handles_a_quoted_field_containing_a_comma(tmp_path):
     db_path = tmp_path / "app.db"
     load_seed(db_path=db_path, seed_dir=SEED_DIR)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM tickets WHERE ticket_id = ?", ("T-1047",)).fetchone()
 
@@ -92,7 +93,7 @@ def test_load_seed_overwrites_pre_existing_unrelated_data_in_the_tables(tmp_path
     db_path = tmp_path / "app.db"
     load_seed(db_path=db_path, seed_dir=SEED_DIR)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "INSERT INTO tickets (ticket_id, customer_id, created_at, text) VALUES (?, ?, ?, ?)",
             ("T-9999", "C-00", "2000-01-01T00:00:00", "stray row that should not survive a reload"),
@@ -101,11 +102,38 @@ def test_load_seed_overwrites_pre_existing_unrelated_data_in_the_tables(tmp_path
 
     load_seed(db_path=db_path, seed_dir=SEED_DIR)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         remaining = conn.execute(
             "SELECT COUNT(*) FROM tickets WHERE ticket_id = ?", ("T-9999",)
         ).fetchone()[0]
     assert remaining == 0
+
+
+def test_load_seed_leaves_the_previous_good_database_intact_on_a_failed_reload(tmp_path):
+    # sqlite3 auto-commits CREATE/DROP TABLE independently of a trailing
+    # commit() -- without an explicit transaction wrapping the whole
+    # drop/create/insert sequence, a failure partway through (e.g. a
+    # malformed row) would durably leave the tables dropped-and-empty
+    # instead of rolling back to whatever was there before.
+    db_path = tmp_path / "app.db"
+    load_seed(db_path=db_path, seed_dir=SEED_DIR)
+    good_tickets = _rows(db_path, "tickets", "ticket_id")
+    assert good_tickets  # sanity: the baseline load actually populated rows
+
+    bad_seed_dir = tmp_path / "bad_seed"
+    bad_seed_dir.mkdir()
+    (bad_seed_dir / "tickets.csv").write_text((SEED_DIR / "tickets.csv").read_text())
+    lines = (SEED_DIR / "customers.csv").read_text().splitlines()
+    lines[1] = lines[1].rsplit(",", 1)[0] + ",NOT_A_NUMBER"  # corrupt open_tickets
+    (bad_seed_dir / "customers.csv").write_text("\n".join(lines) + "\n")
+
+    try:
+        load_seed(db_path=db_path, seed_dir=bad_seed_dir)
+        raise AssertionError("expected load_seed to raise on the malformed open_tickets value")
+    except ValueError:
+        pass
+
+    assert _rows(db_path, "tickets", "ticket_id") == good_tickets
 
 
 def test_load_seed_output_is_readable_by_the_mcp_triage_server(tmp_path, monkeypatch):
