@@ -12,10 +12,11 @@ import sys
 from pathlib import Path
 
 from langchain.agents import create_agent
-from langchain.agents.structured_output import StructuredOutputValidationError, ToolStrategy
+from langchain.agents.structured_output import StructuredOutputError, ToolStrategy
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.errors import GraphRecursionError
 
 from schema import TriageDecision, validate_decision
 
@@ -24,8 +25,8 @@ _POLICY_TEXT = (_REPO_ROOT / "TRIAGE_POLICY.md").read_text(encoding="utf-8")
 
 # Structured-output tool-calling strategy validates the model's final answer
 # against TriageDecision by construction. `handle_errors=False` makes a
-# validation failure raise `StructuredOutputValidationError` immediately out
-# of `agent.ainvoke()` instead of create_agent's own internal (unbounded)
+# validation failure raise a `StructuredOutputError` immediately out of
+# `agent.ainvoke()` instead of create_agent's own internal (unbounded)
 # self-correction loop -- `triage()`'s own two-attempt loop below is the
 # actual, testable retry boundary this story describes, not that one.
 _RESPONSE_FORMAT = ToolStrategy(schema=TriageDecision, handle_errors=False)
@@ -38,18 +39,24 @@ def _get_model() -> BaseChatModel:
 
     Default: `ChatGoogleGenerativeAI`, model name from `MODEL` (default
     `gemini-3.8-flash`), key from `GEMINI_API_KEY`.
-    `PROVIDER=groq`: `ChatGroq` instead, same `MODEL` var, key from `GROQ_API_KEY`.
+    `PROVIDER=groq`: `ChatGroq` instead, model name from `MODEL` (default
+    `openai/gpt-oss-120b`, per `AGENTS.md`), key from `GROQ_API_KEY`.
+
+    The provider is decided first so each branch gets its own default model
+    name -- otherwise `PROVIDER=groq` with `MODEL` unset would build a
+    `ChatGroq` with a Gemini model ID.
     """
     provider = os.environ.get("PROVIDER", "").strip().lower()
-    model_name = os.environ.get("MODEL", "gemini-3.8-flash")
 
     if provider == "groq":
         from langchain_groq import ChatGroq
 
+        model_name = os.environ.get("MODEL", "openai/gpt-oss-120b")
         return ChatGroq(model=model_name, api_key=os.environ.get("GROQ_API_KEY"))
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
+    model_name = os.environ.get("MODEL", "gemini-3.8-flash")
     return ChatGoogleGenerativeAI(model=model_name, api_key=os.environ.get("GEMINI_API_KEY"))
 
 
@@ -113,9 +120,23 @@ async def triage(ticket_id: str) -> dict:
     for _attempt in range(_MAX_ATTEMPTS):
         try:
             result = await agent.ainvoke(message)
-            decision = validate_decision(result["structured_response"].model_dump())
+            structured = result.get("structured_response")
+            if structured is None:
+                # The model ended its turn without calling the structured-output
+                # tool at all -- not a validation failure, but the same "no
+                # usable decision" outcome, so it goes through the same retry.
+                raise ValueError(
+                    f"Model turn for ticket {ticket_id} ended without a structured decision."
+                )
+            # `structured` is already a validated TriageDecision (ToolStrategy
+            # parsed it against this same class). Routing it through
+            # validate_decision anyway is intentional round-trip defense-in-depth:
+            # per this story's Code Map, Epic 1's public validator must be the
+            # actual gate CAP-4 refers to, not just ToolStrategy's internal one --
+            # so in practice this call is expected to be a no-op, not dead code.
+            decision = validate_decision(structured.model_dump())
             return decision.model_dump()
-        except (StructuredOutputValidationError, ValueError) as exc:
+        except (StructuredOutputError, GraphRecursionError, ValueError) as exc:
             last_error = exc
             continue
 

@@ -3,10 +3,13 @@
 Two layers, per the story's decision log:
 
 - Fake-model tests (`GenericFakeChatModel`, no API key needed) drive the
-  real `agent.py` retry/validation logic and the real `mcp/triage_server.py`
-  functions against a `tmp_path`-seeded `app.db`, scripting the model's tool
-  calls exactly like `tests/test_load_seed.py`'s existing import-by-path
-  pattern. These always run and stay deterministic.
+  real `agent.py` retry/validation logic. Most of them call the real
+  (unmodified) `mcp/triage_server.py` `get_ticket`/`get_customer_history`
+  functions in-process against a `tmp_path`-seeded `app.db`, scripting the
+  model's tool calls exactly like `tests/test_load_seed.py`'s existing
+  import-by-path pattern; `test_unknown_ticket_id_...` instead goes through
+  the real MCP stdio subprocess via the real `_get_mcp_tools()`. These
+  always run and stay deterministic.
 - One live-gated test calls the real configured provider (Gemini) for
   T-1042 and T-1099 against the real seed data -- the only way to get any
   automated signal on CAP-6's injection resistance. It skips cleanly when
@@ -74,11 +77,10 @@ def _seed_and_wrap_tools(tmp_path, monkeypatch):
     seed it, and wrap its real (unmodified) `get_ticket`/`get_customer_history`
     functions as LangChain tools that record every call made through them.
 
-    This exercises the real MCP server's read logic end-to-end without
-    needing a second stdio subprocess pointed at a non-default database path
-    (the subprocess's own `DB_PATH` is fixed relative to its file, not
-    overridable per-test) -- `agent.py`'s own `_get_mcp_tools` is monkeypatched
-    to return these instead for the fake-model tests below.
+    This calls those real functions in-process (not through the real MCP
+    stdio subprocess: the subprocess's own `DB_PATH` is fixed relative to
+    its file, not overridable per-test) -- `agent.py`'s own `_get_mcp_tools`
+    is monkeypatched to return these instead for the fake-model tests below.
     """
     triage_server = _import_triage_server()
     db_path = tmp_path / "app.db"
@@ -194,6 +196,53 @@ def test_two_consecutive_invalid_structured_responses_raise_a_clear_value_error(
             _tool_call_message("TriageDecision", INVALID_DECISION, "b3"),
         ]
     )
+    _patch_agent(monkeypatch, tools, FakeToolCallingModel(messages=messages))
+
+    with pytest.raises(ValueError, match="T-1042"):
+        asyncio.run(agent.triage("T-1042"))
+
+
+def test_model_turn_with_no_tool_calls_on_both_attempts_raises_a_clear_value_error(
+    tmp_path, monkeypatch
+):
+    # If the model ends its turn without ever calling the structured-output
+    # tool, result["structured_response"] is None. That must be treated the
+    # same as an invalid response (retried once, then a clear ValueError),
+    # not crash with an uncaught AttributeError from `.model_dump()`.
+    tools, calls = _seed_and_wrap_tools(tmp_path, monkeypatch)
+
+    messages = iter(
+        [
+            AIMessage(content="I'm not sure how to triage this."),
+            AIMessage(content="Still not sure."),
+        ]
+    )
+    _patch_agent(monkeypatch, tools, FakeToolCallingModel(messages=messages))
+
+    with pytest.raises(ValueError, match="T-1042"):
+        asyncio.run(agent.triage("T-1042"))
+
+
+def test_two_structured_output_tool_calls_in_one_turn_raises_a_clear_value_error(
+    tmp_path, monkeypatch
+):
+    # If the model calls the structured-output tool twice in a single turn,
+    # create_agent raises MultipleStructuredOutputsError (a
+    # StructuredOutputError, not a StructuredOutputValidationError or plain
+    # ValueError) -- this must go through the same retry-then-clear-error
+    # path too, not propagate uncaught.
+    tools, calls = _seed_and_wrap_tools(tmp_path, monkeypatch)
+
+    def _two_decisions_message(id_prefix: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "TriageDecision", "args": VALID_DECISION, "id": f"{id_prefix}1"},
+                {"name": "TriageDecision", "args": VALID_DECISION, "id": f"{id_prefix}2"},
+            ],
+        )
+
+    messages = iter([_two_decisions_message("a"), _two_decisions_message("b")])
     _patch_agent(monkeypatch, tools, FakeToolCallingModel(messages=messages))
 
     with pytest.raises(ValueError, match="T-1042"):
