@@ -17,5 +17,9 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8"]
 
+[tool.uv]
+# cryptography 50 has no macOS x86_64 wheel and fails to build from source here
+override-dependencies = ["cryptography==45.0.5"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

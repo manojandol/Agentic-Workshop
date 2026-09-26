@@ -1,0 +1,11 @@
+- id: "1"
+  title: The triage-decision schema
+  description: >-
+    Cover CAP-1: accept a JSON triage decision that matches decision-schema.md,
+    and reject anything else with a clear error.
+- id: "2"
+  title: The seed loader
+  description: >-
+    Cover CAP-2: uv run python load_seed.py loads seed/tickets.csv and
+    seed/customers.csv into app.db with the columns mcp/triage_server.py already
+    reads, and a second run leaves the same database.
