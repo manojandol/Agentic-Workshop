@@ -26,13 +26,24 @@ def test_missing_field_is_rejected_with_a_message_naming_the_field():
 
 
 def test_extra_field_is_rejected_with_a_message_naming_the_field():
-    bad = dict(VALID, extra="nope")
-    with pytest.raises(ValueError, match="extra"):
+    # The bad key is deliberately not "extra": pydantic's generic error tag
+    # for any forbidden extra field is literally "extra_forbidden", so a key
+    # named "extra" would make this assertion pass even if the message
+    # stopped naming the actual offending field. "unexpected_field" doesn't
+    # overlap with that generic tag, so the match only succeeds because the
+    # message's `loc` genuinely names this field.
+    bad = dict(VALID, unexpected_field="nope")
+    with pytest.raises(ValueError, match="unexpected_field"):
         validate_decision(bad)
 
 
 def test_invalid_category_is_rejected_with_a_message_naming_the_field():
-    bad = dict(VALID, category="not-a-category")
+    # The bad value is deliberately not "not-a-category": that string
+    # contains "category" as a substring, so the assertion would pass even
+    # if the message stopped naming the field and only echoed the bad input.
+    # "nope" shares no substring with "category", so the match only
+    # succeeds because the message's `loc` genuinely names this field.
+    bad = dict(VALID, category="nope")
     with pytest.raises(ValueError, match="category"):
         validate_decision(bad)
 
@@ -62,7 +73,7 @@ def test_non_object_payload_is_rejected():
 
 
 def test_multiple_simultaneous_violations_still_raises_one_clear_error():
-    bad = {"category": "not-a-category", "priority": "P2", "route": "billing-team"}  # missing rationale too
+    bad = {"category": "nope", "priority": "P2", "route": "billing-team"}  # missing rationale too
     with pytest.raises(ValueError, match="category") as exc_info:
         validate_decision(bad)
     assert "rationale" in str(exc_info.value)

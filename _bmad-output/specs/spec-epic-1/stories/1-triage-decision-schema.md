@@ -2,7 +2,7 @@
 title: 'The triage-decision schema'
 type: 'feature'
 created: '2026-09-26'
-status: 'in-progress'
+status: 'done'
 route: 'oneshot'
 review_loop_iteration: 0
 context: ['{project-root}/_bmad-output/specs/spec-epic-1/decision-schema.md']
@@ -41,10 +41,12 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-1/decision-schema.md']
 Four parallel layers (Blind Hunter, Edge Case Hunter, Verification Gap, Acceptance Auditor) reviewed the full branch diff against this story and `decision-schema.md`. 1 `decision-needed`, 4 `patch`, 0 `defer`, 5 rejected.
 
 - [x] [Review][Decision] Undocumented, out-of-scope `cryptography` pin bundled into this story's branch (`pyproject.toml`/`uv.lock`, commit `242df19`) — resolved: kept in branch, documented above in Implementation Notes (per `AGENTS.md`'s "say so instead of doing it").
-- [ ] [Review][Patch] Rejection-test assertions coincidentally pass regardless of real field-naming (`match="extra"` satisfied by pydantic's generic `extra_forbidden` tag; `match="category"`/`match="route"` satisfied by the bad input value's own substring, not proof the message names the field) [tests/test_schema.py:29-31,34-37,46-48,64-67]
-- [ ] [Review][Patch] `validate_decision`'s type hint (`data: dict`) contradicts `test_non_object_payload_is_rejected`, which deliberately passes str/list/int/None — widen to `object` [schema.py:46]
-- [ ] [Review][Patch] `cryptography` override applies unconditionally to all platforms though the adjoining comment says the problem is macOS x86_64–specific — add a platform/machine environment marker [pyproject.toml:20-22]
-- [ ] [Review][Patch] No breadcrumb comment naming which direct dependency transitively pulls in `cryptography` [pyproject.toml:20-22]
+- [x] [Review][Patch] Rejection-test assertions coincidentally pass regardless of real field-naming (`match="extra"` satisfied by pydantic's generic `extra_forbidden` tag; `match="category"` satisfied by the bad input value's own substring, not proof the message names the field) [tests/test_schema.py:29-31,34-40,76] — fixed: `test_extra_field_...` now uses key `unexpected_field` (no overlap with pydantic's `extra_forbidden` tag); `test_invalid_category_...` and the multi-violation test now use bad value `"nope"` (no overlap with the field name `category`). `test_invalid_route_...`/`test_invalid_priority_...` were already sound (their bad values `"not-a-team"`/`"P5"` never overlapped `route`/`priority`).
+- [x] [Review][Patch] `validate_decision`'s type hint (`data: dict`) contradicts `test_non_object_payload_is_rejected`, which deliberately passes str/list/int/None — widen to `object` [schema.py:46] — fixed: signature is now `validate_decision(data: object)`, with a docstring note explaining why.
+- [x] [Review][Patch] `cryptography` override applies unconditionally to all platforms though the adjoining comment says the problem is macOS x86_64–specific — add a platform/machine environment marker [pyproject.toml:20-22] — fixed: `override-dependencies` now reads `"cryptography==45.0.5; sys_platform == 'darwin' and platform_machine == 'x86_64'"`. Re-ran `uv lock` (138 packages resolved) and `uv run pytest` (25 passed) on this machine (`darwin`/`x86_64`) to confirm the marker still applies here and the pin still takes effect.
+- [x] [Review][Patch] No breadcrumb comment naming which direct dependency transitively pulls in `cryptography` [pyproject.toml:20-22] — fixed: comment now names `mlflow` (`cryptography<51,>=43.0.0`, a direct dependency) and `google-auth` (behind `langchain-google-genai`) as the packages pulling it in, traced via `importlib.metadata`.
+
+All decision-needed and patch findings from the branch code review are now resolved (fixed or accepted). Applied on branch `story/manoj-1.1-patches`, based on `main` post-merge.
 
 **Rejected:**
 - `low` — No test ties `schema.py`'s tuples directly to `decision-schema.md`'s table (only internal cross-check exists): fix would require parsing the markdown table, disproportionate for a spec file that changes rarely and only via `/bmad-spec`.
