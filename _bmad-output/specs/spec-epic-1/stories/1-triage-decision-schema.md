@@ -2,7 +2,7 @@
 title: 'The triage-decision schema'
 type: 'feature'
 created: '2026-09-26'
-status: 'done'
+status: 'in-progress'
 route: 'oneshot'
 review_loop_iteration: 0
 context: ['{project-root}/_bmad-output/specs/spec-epic-1/decision-schema.md']
@@ -25,6 +25,7 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-1/decision-schema.md']
 - Added `tests/test_schema.py`: the valid-decision case, every allowed `category`/`priority`/`route` value individually, and each rejection case (missing field, extra field, invalid enum value, wrong type). `uv run pytest` — 21 passed.
 - Kept validation purely structural (field names + per-field allowed values), per `decision-schema.md`. Did not enforce the `TRIAGE_POLICY.md` category→route pairing (e.g. `billing`→`billing-team`) — that's policy application, which is out of scope for CAP-1's generic schema check and belongs to whichever epic applies the policy.
 - Blind Hunter review (N=3 floor, 6 findings) — all six accepted as real, all patched: (1) added a test that the `Literal` field annotations stay in sync with the `CATEGORIES`/`PRIORITIES`/`ROUTES` tuples; (2) rejection tests now assert the error message names the offending field, not just `ValueError`'s type; (3) added `test_empty_rationale_is_accepted` documenting that `decision-schema.md`'s "no enum" on `rationale` is intentionally permissive; (4) added `test_non_object_payload_is_rejected` for non-dict top-level input; (5) added a test for a payload with two simultaneous violations; (6) documented the category↔route non-validation scope boundary directly in `TriageDecision`'s docstring, not only in `epic-1-context.md`. Re-ran `uv run pytest` after each patch — 25 passed.
+- `pyproject.toml`/`uv.lock` also carry a `[tool.uv] override-dependencies` pin of `cryptography==45.0.5` (commit `242df19`), needed because `cryptography` 50.x has no macOS x86_64 wheel and fails to build from source locally. This is not part of CAP-1's scope; it's a local-dev-environment fix that rides on this branch because it was needed to run `uv sync`/`uv run pytest` at all during this story's work. Recorded here per the branch code review below, which flagged it as an undocumented out-of-scope change.
 
 ## Review Triage Log
 
@@ -34,3 +35,20 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-1/decision-schema.md']
 - Untested non-object top-level payload — verdict `low`, real gap in coverage: manually confirmed `validate_decision` already raises `ValueError` for a string/list/int/`None`, but no test locked in that behavior. Patched with `test_non_object_payload_is_rejected`.
 - Untested multiple-simultaneous-violations case — verdict `low`, real gap in coverage; fix was a simple test addition so not rejected despite low severity. Patched with `test_multiple_simultaneous_violations_still_raises_one_clear_error`.
 - Category↔route scope boundary undocumented in code — verdict `low`, real: the deliberate choice not to validate the `TRIAGE_POLICY.md` category→route pairing was recorded only in `epic-1-context.md`, one level removed from `schema.py`. Patched by adding it to `TriageDecision`'s docstring.
+
+## Branch Code Review (`story/manoj-1.1` vs `main`)
+
+Four parallel layers (Blind Hunter, Edge Case Hunter, Verification Gap, Acceptance Auditor) reviewed the full branch diff against this story and `decision-schema.md`. 1 `decision-needed`, 4 `patch`, 0 `defer`, 5 rejected.
+
+- [x] [Review][Decision] Undocumented, out-of-scope `cryptography` pin bundled into this story's branch (`pyproject.toml`/`uv.lock`, commit `242df19`) — resolved: kept in branch, documented above in Implementation Notes (per `AGENTS.md`'s "say so instead of doing it").
+- [ ] [Review][Patch] Rejection-test assertions coincidentally pass regardless of real field-naming (`match="extra"` satisfied by pydantic's generic `extra_forbidden` tag; `match="category"`/`match="route"` satisfied by the bad input value's own substring, not proof the message names the field) [tests/test_schema.py:29-31,34-37,46-48,64-67]
+- [ ] [Review][Patch] `validate_decision`'s type hint (`data: dict`) contradicts `test_non_object_payload_is_rejected`, which deliberately passes str/list/int/None — widen to `object` [schema.py:46]
+- [ ] [Review][Patch] `cryptography` override applies unconditionally to all platforms though the adjoining comment says the problem is macOS x86_64–specific — add a platform/machine environment marker [pyproject.toml:20-22]
+- [ ] [Review][Patch] No breadcrumb comment naming which direct dependency transitively pulls in `cryptography` [pyproject.toml:20-22]
+
+**Rejected:**
+- `low` — No test ties `schema.py`'s tuples directly to `decision-schema.md`'s table (only internal cross-check exists): fix would require parsing the markdown table, disproportionate for a spec file that changes rarely and only via `/bmad-spec`.
+- `low` — `decision-schema.md`'s `rationale` row ("one sentence") reads inconsistently with the prose "has no enum": fix would mean editing the spec under review, out of scope for this triage.
+- `low` — No wrong-type test for `category`/`priority`/`route` (only `rationale` covered): `Literal` fields already reject any non-matching value via the same code path already exercised by the invalid-enum tests; Verification Gap layer independently confirmed no behavioral gap.
+- `low` — No near-miss tests (casing/whitespace on enum values): low likelihood in practice since structured LLM output uses exact literal values; out of this story's scope.
+- `low` — Allowed-value lists duplicated across `decision-schema.md`, `SPEC.md`, `epic-1-context.md`, and twice inside `schema.py`, with no single source of truth: same rejection logic as the first item — fix requires doc/spec restructuring, not a direct code correction.
