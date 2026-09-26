@@ -18,8 +18,14 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [tool.uv]
-# cryptography 50 has no macOS x86_64 wheel and fails to build from source here
-override-dependencies = ["cryptography==45.0.5"]
+# mlflow (a direct dependency) requires cryptography<51,>=43.0.0, which
+# resolves to 50.x by default; google-auth (behind langchain-google-genai)
+# also depends on cryptography. cryptography 50 has no macOS x86_64 wheel
+# and fails to build from source there, so pin it down on that platform
+# only -- other platforms can use the normal resolved version.
+override-dependencies = [
+    "cryptography==45.0.5; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

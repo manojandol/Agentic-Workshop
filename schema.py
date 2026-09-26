@@ -43,8 +43,12 @@ class TriageDecision(BaseModel):
     rationale: str
 
 
-def validate_decision(data: dict) -> TriageDecision:
+def validate_decision(data: object) -> TriageDecision:
     """Validate a candidate triage decision.
+
+    `data` is typed `object`, not `dict`, because this function's job is
+    exactly to reject non-dict payloads (see `test_non_object_payload_is_rejected`)
+    alongside every other way a decision can be malformed.
 
     Returns a `TriageDecision` when `data` matches the schema exactly.
     Raises `ValueError` with a clear, specific message otherwise (missing
